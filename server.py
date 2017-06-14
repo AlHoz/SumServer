@@ -1,8 +1,10 @@
 import uuid
-import tornado.ioloop
-import tornado.web
+
 import tornado.escape
+import tornado.web
 import tornado.websocket
+from tornado.ioloop import IOLoop
+from tornado.queues import Queue
 
 
 class SessionHandler(tornado.web.RequestHandler):
@@ -23,7 +25,7 @@ class VoteHandler(tornado.web.RequestHandler):
             if 'num' in data:
                 try:
                     num = int(data["num"])
-                    OnNewNumUpdate(num)
+                    IOLoop.current().spawn_callback(OnNewNumUpdate, num)
                 except ValueError:
                     self.__error_response(400, "Unrecognizable request")
             else:
@@ -42,6 +44,9 @@ class Storage:
     sum = 0
 
 
+q = Queue()
+
+
 class WSHandler(tornado.websocket.WebSocketHandler):
     def open(self):
         Storage.clients.append(self)
@@ -50,10 +55,17 @@ class WSHandler(tornado.websocket.WebSocketHandler):
         Storage.clients.remove(self)
 
 
-def OnNewNumUpdate(num):
-    Storage.sum += num
-    for client in Storage.clients:
-        client.write_message({"sum": Storage.sum})
+async def watch_queue():
+    while True:
+        num = await q.get()
+        Storage.sum += num
+
+        for client in Storage.clients:
+            client.write_message({"sum": Storage.sum})
+
+
+async def OnNewNumUpdate(num):
+    await q.put(num)
 
 
 def make_app():
@@ -67,4 +79,5 @@ def make_app():
 if __name__ == "__main__":
     app = make_app()
     app.listen(8080, address='127.0.0.1')
-    tornado.ioloop.IOLoop.current().start()
+    IOLoop.instance().add_callback(watch_queue)
+    IOLoop.current().start()
